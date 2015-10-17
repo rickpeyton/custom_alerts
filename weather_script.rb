@@ -2,6 +2,7 @@ require './wunderground_wrapper'
 require './twilio_wrapper'
 require 'json'
 require 'date'
+require 'pry'
 
 
 # Features to Implement
@@ -12,26 +13,59 @@ require 'date'
 class Windows
   def self.check
     results = WundergroundWrapper::TenDay.get("AL", "Calera")
-    hourly_results = JSON.parse(results)["hourly_forecast"]
+    @hourly_results = JSON.parse(results)["hourly_forecast"]
     @lower_temp_threshold = 67
     @upper_temp_threshold = 82
     @upper_precipitation_threshold = 39
     @upper_humidity_threshold = 79
     @time_check = DateTime.now.hour < 12 ? "day" : "night"
-    counter = 0
-    @continue = true
+    @time_check == "day" ? day_check : night_check
+    check_temp_and_precipitation
+    take_decisive_action
+  end
 
-    while counter < 10 && @continue == true do
-      @temp = hourly_results[counter + 1]["temp"]["english"].to_i
-      @precipitation_chance = hourly_results[counter]["pop"].to_i
-      @humidity = hourly_results[counter]["humidity"].to_i
-      check_temp_and_precipitation
-      if @continue == true
-        counter += 1
+  def self.day_check
+    day_results = @hourly_results.select { |x| (x["FCTTIME"]["hour"].to_i > 7 && x["FCTTIME"]["mday"].to_i == Date.today.day) && (x["FCTTIME"]["hour"].to_i < 18 && x["FCTTIME"]["mday"].to_i == Date.today.day) }
+    narrowed_results = day_results.select do |x|
+      x["pop"].to_i <= @upper_precipitation_threshold &&
+      (x["humidity"].to_i < @upper_humidity_threshold &&
+        x["temp"]["english"].to_i < @upper_temp_threshold - 5) &&
+      x["temp"]["english"].to_i >= @lower_temp_threshold &&
+      x["temp"]["english"].to_i <= @upper_temp_threshold
+    end
+    if narrowed_results.count >= 7
+      start_time = narrowed_results.first["FCTTIME"]["hour"].to_i
+      if start_time > 12
+        start_time -= 12
       end
+      @reason = "After #{start_time} it is going to be a beautiful"
+    else
+      check_results(day_results)
+    end
+  end
+
+  def self.night_check
+    night_results = @hourly_results.select { |x| (x["FCTTIME"]["hour"].to_i > 19 && x["FCTTIME"]["mday"].to_i == Date.today.day) || (x["FCTTIME"]["hour"].to_i < 6 && x["FCTTIME"]["mday"].to_i == (Date.today + 1).day) }
+
+    check_results(night_results)
+  end
+
+  def self.check_results(results)
+    if results.select { |x| x["pop"].to_i > @upper_precipitation_threshold }.count > 0
+      @too_rainy = true
     end
 
-    take_decisive_action
+    if results.select { |x| (x["humidity"].to_i > @upper_humidity_threshold) && (x["temp"]["english"].to_i > (@upper_temp_threshold - 5)) }.count > 0
+      @too_humid = true
+    end
+
+    if results.select { |x| x["temp"]["english"].to_i < @lower_temp_threshold || x["temp"]["english"].to_i > @upper_temp_threshold }.count > 0
+      @too_cold = true
+    end
+
+    if results.select { |x| x["temp"]["english"].to_i > @upper_temp_threshold }.count > 0
+      @too_hot = true
+    end
   end
 
   def self.take_decisive_action
@@ -56,18 +90,20 @@ class Windows
 
   def self.check_temp_and_precipitation
     case
-    when @temp < @lower_temp_threshold
-      @reason = "It is going to be a cool"
-      @continue = false
-    when @temp > @upper_temp_threshold
-      @reason = "It is going to be a hot"
-      @continue = false
-    when @precipitation_chance > @upper_precipitation_threshold
+    when @too_rainy
       @reason = "It is going to be a rainy"
       @continue = false
-    when @humidity > @upper_humidity_threshold && @temp > (@upper_temp_threshold - 5)
+    when @too_humid
       @reason = "It is going to be a humid"
       @continue = false
+    when @too_hot
+      @reason = "It is going to be a hot"
+      @continue = false
+    when @too_cold
+      @reason = "It is going to be a cool"
+      @continue = false
+    when @reason
+      @contine = true
     else
       @continue = true
       @reason = "It is going to be a beautiful"
